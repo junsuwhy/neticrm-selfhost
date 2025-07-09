@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"flag"
 	"fmt"
 	"math/big"
 	"os"
@@ -39,44 +40,82 @@ type Config struct {
 }
 
 var (
-	green  = color.New(color.FgGreen)
-	red    = color.New(color.FgRed)
-	yellow = color.New(color.FgYellow)
-	cyan   = color.New(color.FgCyan)
-	bold   = color.New(color.Bold)
+	green   = color.New(color.FgGreen)
+	red     = color.New(color.FgRed)
+	yellow  = color.New(color.FgYellow)
+	cyan    = color.New(color.FgCyan)
+	bold    = color.New(color.Bold)
+	gray    = color.New(color.FgHiBlack) // 暗色系用於 debug 訊息
+	verbose = false                     // 是否顯示 debug 訊息
 )
 
 func main() {
+	// 解析命令行參數
+	flag.BoolVar(&verbose, "v", false, "顯示詳細的 debug 訊息")
+	flag.Parse()
+
 	bold.Println("netiCRM Self-Host 自架站台安裝程式")
 	fmt.Println()
 
 	// 檢查階段
-	if err := goCheck(); err != nil {
-		red.Printf("✗ 檢查失敗: %v\n", err)
-		os.Exit(1)
+	debugPrint("🔍 開始執行 doCheck 階段 - 系統檢查")
+	checkResult := doCheck()
+	if checkResult != nil {
+		// 檢查是否是特殊的流程控制錯誤（實際不是錯誤，而是流程跳轉）
+		if checkResult.Error() == "continue_install" {
+			// 這表示用戶選擇了"備份並覆蓋設定"，需要繼續安裝流程
+			debugPrint("✅ doCheck 階段完成 - 繼續安裝流程")
+		} else {
+			red.Printf("✗ 檢查失敗: %v\n", checkResult)
+			os.Exit(1)
+		}
+	} else {
+		debugPrint("✅ doCheck 階段完成")
 	}
+	fmt.Println()
 
 	// 詢問階段
-	cfg, err := goAsk()
+	debugPrint("📝 開始執行 doAsk 階段 - 收集設定")
+	cfg, err := doAsk()
 	if err != nil {
 		red.Printf("✗ 設定失敗: %v\n", err)
 		os.Exit(1)
 	}
+	debugPrint("✅ doAsk 階段完成")
+	fmt.Println()
 
 	// 執行階段
-	if err := goRun(cfg); err != nil {
+	debugPrint("🚀 開始執行 doRun 階段 - 執行安裝")
+	if err := doRun(cfg); err != nil {
 		red.Printf("✗ 執行失敗: %v\n", err)
 		os.Exit(1)
 	}
+	debugPrint("✅ doRun 階段完成")
+	fmt.Println()
 
 	green.Println("✅ 安裝完成！")
 }
 
-// goCheck 進行所有事前檢查
-func goCheck() error {
+// debugPrint 只在 verbose 模式下輸出 debug 訊息
+func debugPrint(message string) {
+	if verbose {
+		gray.Println(message)
+	}
+}
+
+// doCheck 進行所有事前檢查
+func doCheck() error {
+	debugPrint("  🔍 檢查現有檔案...")
 	// 檢查是否有 .env 和資料庫檔案
 	hasEnv := fileExists(targetFile)
 	hasMariaDBData := checkMariaDBData()
+	
+	if hasEnv {
+		debugPrint("  ✓ 發現 .env 檔案")
+	}
+	if hasMariaDBData {
+		debugPrint("  ✓ 發現 MariaDB 資料")
+	}
 
 	if hasEnv && hasMariaDBData {
 		yellow.Println("發現現有的資料庫檔案，看起來這是一個已經安裝好的網站。")
@@ -195,8 +234,8 @@ func goCheck() error {
 		}
 
 		if !overwrite {
-			fmt.Println("安裝取消。")
-			os.Exit(0)
+			// 不要更改設定，但要提供選項菜單
+			return showExistingConfigOptions(existingEnv)
 		}
 
 		if err := backupFile(targetFile); err != nil {
@@ -205,6 +244,7 @@ func goCheck() error {
 	}
 
 	// 檢查 Docker
+	debugPrint("  🐳 檢查 Docker 環境...")
 	if err := checkDocker(); err != nil {
 		yellow.Printf("⚠️  %v\n", err)
 
@@ -224,28 +264,33 @@ func goCheck() error {
 	}
 
 	// 檢查 Caddyfile
+	debugPrint("  🔐 檢查 SSL 配置...")
 	if fileExists(caddyfile) {
-		cyan.Println("發現 Caddyfile，可使用 SSL 配置。")
+		cyan.Println("現有配置：有 SSL 憑證")
 		if domain := getDomainFromCaddyfile(); domain != "" {
 			fmt.Printf("現有 SSL 域名：%s\n", domain)
 		}
+	} else {
+		cyan.Println("現有配置：沒有 SSL 憑證")
 	}
 
 	return nil
 }
 
-// goAsk 進行所有互動詢問
-func goAsk() (*Config, error) {
+// doAsk 進行所有互動詢問
+func doAsk() (*Config, error) {
 	cfg := &Config{
 		envVars: make(map[string]string),
 	}
 
 	// 載入預設環境變數
+	debugPrint("  📄 載入預設環境變數...")
 	if err := loadDefaultEnvs(cfg); err != nil {
 		return nil, err
 	}
 
 	// 1. 語言選擇
+	debugPrint("  🌐 詢問語言設定...")
 	if err := askLanguage(cfg); err != nil {
 		return nil, err
 	}
@@ -262,16 +307,19 @@ func goAsk() (*Config, error) {
 		cyan.Println("or bind to a specific port according to your chosen settings.")
 	}
 
+	debugPrint("  🌍 詢問域名和 SSL 設定...")
 	if err := askDomainAndSSL(cfg); err != nil {
 		return nil, err
 	}
 
 	// 3. MySQL 設定
+	debugPrint("  🗄️ 詢問 MySQL 設定...")
 	if err := askMySQL(cfg); err != nil {
 		return nil, err
 	}
 
 	// 4. 管理員帳號密碼
+	debugPrint("  👤 詢問管理員帳號設定...")
 	if err := askAdminCredentials(cfg); err != nil {
 		return nil, err
 	}
@@ -279,8 +327,9 @@ func goAsk() (*Config, error) {
 	return cfg, nil
 }
 
-// goRun 執行寫入和啟動
-func goRun(cfg *Config) error {
+// doRun 執行寫入和啟動
+func doRun(cfg *Config) error {
+	debugPrint("  ⚙️ 準備環境變數...")
 	// 設定環境變數
 	cfg.envVars["LANGUAGE"] = cfg.Language
 
@@ -311,14 +360,22 @@ func goRun(cfg *Config) error {
 	cfg.envVars["ADMIN_LOGIN_PASSWORD"] = cfg.AdminLoginPassword
 
 	// 寫入 .env
+	debugPrint("  📝 寫入 .env 檔案...")
 	if err := writeEnvFile(cfg); err != nil {
 		return fmt.Errorf("寫入 .env 失敗: %w", err)
 	}
 
 	// 更新 Caddyfile
 	if cfg.UseSSL {
+		debugPrint("  🔐 更新 Caddyfile...")
 		if err := updateCaddyfile(cfg); err != nil {
 			return fmt.Errorf("更新 Caddyfile 失敗: %w", err)
+		}
+		
+		// 重新啟動 caddy 以更新 SSL 憑證
+		debugPrint("  🔄 重新抓取 SSL 憑證...")
+		if err := refreshSSLCertificate(); err != nil {
+			yellow.Printf("⚠️  SSL 憑證重新抓取失敗: %v\n", err)
 		}
 	}
 
@@ -331,6 +388,7 @@ func goRun(cfg *Config) error {
 	green.Printf("✅ .env 建立完成\n")
 
 	// 檢查是否有 Docker
+	debugPrint("  🐳 檢查 Docker 環境...")
 	if err := checkDocker(); err != nil {
 		yellow.Println("Docker Compose 未安裝，請手動執行：")
 		fmt.Printf("docker compose -f %s up -d\n", composeFile)
@@ -338,6 +396,7 @@ func goRun(cfg *Config) error {
 	}
 
 	// 執行 docker compose
+	debugPrint(fmt.Sprintf("  🚀 啟動 Docker 容器 (%s)...", composeFile))
 	fmt.Printf("開始執行 docker compose -f %s up -d ...\n", composeFile)
 	if err := dockerComposeUp(composeFile); err != nil {
 		return err
@@ -416,6 +475,59 @@ func getDomainFromCaddyfile() string {
 	}
 
 	return ""
+}
+
+// getAllDomainsFromCaddyfile 取得 Caddyfile 中的所有域名
+func getAllDomainsFromCaddyfile() []string {
+	data, err := os.ReadFile(caddyfile)
+	if err != nil {
+		return nil
+	}
+
+	var domains []string
+	content := string(data)
+	lines := strings.Split(content, "\n")
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		// 跳過註解和空行
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// 尋找包含 { 的行
+		if strings.Contains(line, "{") {
+			// 提取 { 之前的部分
+			parts := strings.Split(line, "{")
+			if len(parts) > 0 {
+				domainPart := strings.TrimSpace(parts[0])
+				// 移除協議前綴
+				domainPart = strings.TrimPrefix(domainPart, "https://")
+				domainPart = strings.TrimPrefix(domainPart, "http://")
+				// 移除端口
+				if idx := strings.Index(domainPart, ":"); idx != -1 {
+					domainPart = domainPart[:idx]
+				}
+				// 如果有多個域名（逗號分隔），分別加入
+				if strings.Contains(domainPart, ",") {
+					domainList := strings.Split(domainPart, ",")
+					for _, d := range domainList {
+						d = strings.TrimSpace(d)
+						if d != "" && strings.Contains(d, ".") {
+							domains = append(domains, d)
+						}
+					}
+				} else {
+					// 驗證是否為有效域名
+					if domainPart != "" && strings.Contains(domainPart, ".") {
+						domains = append(domains, domainPart)
+					}
+				}
+			}
+		}
+	}
+
+	return domains
 }
 
 func backupFile(path string) error {
@@ -555,6 +667,9 @@ func askLanguage(cfg *Config) error {
 }
 
 func askDomainAndSSL(cfg *Config) error {
+	// 檢查是否已有 Caddyfile
+	hasCaddyfile := fileExists(caddyfile)
+	
 	// SSL 詢問
 	sslPrompt := "Do you have a domain and want to set up SSL automatically?"
 	if cfg.Language == "zh-hant" {
@@ -572,6 +687,37 @@ func askDomainAndSSL(cfg *Config) error {
 	cfg.UseSSL = useSSL
 
 	if useSSL {
+		// 如果已有 Caddyfile，詢問是否要修改
+		if hasCaddyfile {
+			existingDomains := getAllDomainsFromCaddyfile()
+			if len(existingDomains) > 0 {
+				var modifyPrompt string
+				if cfg.Language == "zh-hant" {
+					modifyPrompt = fmt.Sprintf("發現現有的 Caddyfile 包含域名：%s\n是否要修改 Caddyfile？", strings.Join(existingDomains, ", "))
+				} else {
+					modifyPrompt = fmt.Sprintf("Found existing Caddyfile with domains: %s\nDo you want to modify the Caddyfile?", strings.Join(existingDomains, ", "))
+				}
+				
+				var modifyCaddyfile bool
+				modifyConfirm := &survey.Confirm{
+					Message: modifyPrompt,
+					Default: false,
+				}
+				if err := survey.AskOne(modifyConfirm, &modifyCaddyfile); err != nil {
+					return err
+				}
+				
+				if !modifyCaddyfile {
+					if cfg.Language == "zh-hant" {
+						fmt.Println("保留現有的 Caddyfile 設定。")
+					} else {
+						fmt.Println("Keeping existing Caddyfile configuration.")
+					}
+					return nil
+				}
+			}
+		}
+
 		// SSL 路徑
 		domainPrompt := "Please enter your domain name (e.g., example.com):"
 		emailPrompt := "Please enter your email (for Let's Encrypt SSL certificate):"
@@ -866,9 +1012,31 @@ func updateCaddyfile(cfg *Config) error {
 		return err
 	}
 
-	// 替換內容
+	// 檢查是否有現有的域名需要保留
+	var existingDomains []string
+	if fileExists(caddyfile + ".bak") {
+		existingDomains = getAllDomainsFromBackupCaddyfile(caddyfile + ".bak")
+	}
+
+	// 建立新的 Caddyfile 內容
 	content := string(data)
-	content = strings.ReplaceAll(content, "your.domain.name", cfg.Domain)
+	
+	// 準備域名列表
+	var allDomains []string
+	for _, domain := range existingDomains {
+		// 確保不重複新增現有域名
+		if domain != cfg.Domain {
+			allDomains = append(allDomains, domain)
+		}
+	}
+	// 加入新域名
+	allDomains = append(allDomains, cfg.Domain)
+	
+	// 建立域名字串
+	domainString := strings.Join(allDomains, " , ")
+	
+	// 替換內容
+	content = strings.ReplaceAll(content, "your.domain.name", domainString)
 	if cfg.Email != "" {
 		content = strings.ReplaceAll(content, "your-email@domain.com", cfg.Email)
 	}
@@ -884,5 +1052,158 @@ func updateCaddyfile(cfg *Config) error {
 	}
 
 	green.Printf("✅ Caddyfile 已更新\n")
+	return nil
+}
+
+// getAllDomainsFromBackupCaddyfile 從備份的 Caddyfile 中獲取域名
+func getAllDomainsFromBackupCaddyfile(backupFile string) []string {
+	data, err := os.ReadFile(backupFile)
+	if err != nil {
+		return nil
+	}
+
+	var domains []string
+	content := string(data)
+	lines := strings.Split(content, "\n")
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		// 跳過註解和空行
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// 尋找包含 { 的行
+		if strings.Contains(line, "{") {
+			// 提取 { 之前的部分
+			parts := strings.Split(line, "{")
+			if len(parts) > 0 {
+				domainPart := strings.TrimSpace(parts[0])
+				// 移除協議前綴
+				domainPart = strings.TrimPrefix(domainPart, "https://")
+				domainPart = strings.TrimPrefix(domainPart, "http://")
+				// 移除端口
+				if idx := strings.Index(domainPart, ":"); idx != -1 {
+					domainPart = domainPart[:idx]
+				}
+				// 如果有多個域名（逗號分隔），分別加入
+				if strings.Contains(domainPart, ",") {
+					domainList := strings.Split(domainPart, ",")
+					for _, d := range domainList {
+						d = strings.TrimSpace(d)
+						if d != "" && strings.Contains(d, ".") {
+							domains = append(domains, d)
+						}
+					}
+				} else {
+					// 驗證是否為有效域名
+					if domainPart != "" && strings.Contains(domainPart, ".") {
+						domains = append(domains, domainPart)
+					}
+				}
+			}
+		}
+	}
+
+	return domains
+}
+
+// refreshSSLCertificate 重新抓取 SSL 憑證
+func refreshSSLCertificate() error {
+	// 檢查是否有 Docker
+	if err := checkDocker(); err != nil {
+		return err
+	}
+
+	green.Println("正在重新抓取 SSL 憑證...")
+	
+	// 執行 docker compose -f docker-compose-ssl.yaml up -d --force-recreate caddy
+	cmd := exec.Command("docker", "compose", "-f", sslComposeFile, "up", "-d", "--force-recreate", "caddy")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("執行 caddy 重新啟動失敗: %w", err)
+	}
+
+	green.Println("✅ SSL 憑證重新抓取完成")
+	return nil
+}
+
+// showExistingConfigOptions 顯示現有配置的選項菜單
+func showExistingConfigOptions(existingEnv map[string]string) error {
+	domain := existingEnv["DOMAIN"]
+	port := existingEnv["HTTP_PORT"]
+	adminUser := existingEnv["ADMIN_LOGIN_USER"]
+
+	// 如果有 Caddyfile，嘗試從中獲取域名
+	if fileExists(caddyfile) {
+		if caddyDomain := getDomainFromCaddyfile(); caddyDomain != "" {
+			domain = caddyDomain
+		}
+	}
+
+	fmt.Println()
+	cyan.Println("現有配置：")
+	if domain != "" && domain != "localhost" {
+		fmt.Printf("  域名 Domain: %s\n", domain)
+	}
+	if port != "" {
+		fmt.Printf("  端口 Port: %s\n", port)
+	}
+	if adminUser != "" {
+		fmt.Printf("  管理員帳號: %s\n", adminUser)
+	}
+	fmt.Println()
+
+	options := []string{
+		"1. 執行 docker 啟動指令（若已啟動則不影響）",
+		"2. 備份網站檔案並覆蓋設定",
+		"3. 檢視初始設定管理員密碼 ADMIN_LOGIN_PASSWORD",
+		"4. 結束安裝",
+	}
+
+	var choice string
+	prompt := &survey.Select{
+		Message: "請選擇操作（上下鍵選取，或按下數字鍵後 enter）：",
+		Options: options,
+	}
+	if err := survey.AskOne(prompt, &choice); err != nil {
+		return err
+	}
+
+	switch choice {
+	case options[0]: // 執行 docker 啟動指令
+		return startDocker()
+	case options[1]: // 備份並覆蓋配置
+		if err := backupExisting(); err != nil {
+			return err
+		}
+		// 繼續安裝流程，返回特殊錯誤信號
+		return fmt.Errorf("continue_install")
+	case options[2]: // 檢視密碼
+		yellow.Println("⚠️  注意：此會用明文顯示初始密碼，且可能已更改")
+		var confirmShow bool
+		confirmPrompt := &survey.Confirm{
+			Message: "確定要顯示密碼嗎？",
+			Default: false,
+		}
+		if err := survey.AskOne(confirmPrompt, &confirmShow); err != nil {
+			return err
+		}
+
+		if confirmShow {
+			if pass := existingEnv["ADMIN_LOGIN_PASSWORD"]; pass != "" {
+				fmt.Printf("ADMIN_LOGIN_PASSWORD: %s\n", pass)
+			} else {
+				fmt.Println("密碼未設定或為空")
+			}
+		}
+		os.Exit(0)
+	case options[3]: // 結束安裝
+		fmt.Println("安裝取消。")
+		os.Exit(0)
+	}
+	
 	return nil
 }
