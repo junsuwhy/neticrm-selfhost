@@ -119,128 +119,9 @@ func doCheck() error {
 
 	if hasEnv && hasMariaDBData {
 		yellow.Println("發現現有的資料庫檔案，看起來這是一個已經安裝好的網站。")
-
-		// 讀取現有配置
-		existingEnv, _ := godotenv.Read(targetFile)
-		domain := existingEnv["DOMAIN"]
-		port := existingEnv["HTTP_PORT"]
-		adminUser := existingEnv["ADMIN_LOGIN_USER"]
-
-		// 如果有 Caddyfile，嘗試從中獲取域名
-		if fileExists(caddyfile) {
-			if caddyDomain := getDomainFromCaddyfile(); caddyDomain != "" {
-				domain = caddyDomain
-			}
-		}
-
-		fmt.Println()
-		cyan.Println("現有配置：")
-		if domain != "" && domain != "localhost" {
-			fmt.Printf("  域名 Domain: %s\n", domain)
-		}
-		if port != "" {
-			fmt.Printf("  端口 Port: %s\n", port)
-		}
-		if adminUser != "" {
-			fmt.Printf("  管理員帳號: %s\n", adminUser)
-		}
-		fmt.Println()
-
-		options := []string{
-			"1. 執行 docker 啟動指令（若已啟動則不影響）",
-			"2. 備份網站檔案並覆蓋設定",
-			"3. 檢視初始設定管理員密碼 ADMIN_LOGIN_PASSWORD",
-			"4. 結束安裝",
-		}
-
-		var choice string
-		prompt := &survey.Select{
-			Message: "請選擇操作（上下鍵選取，或按下數字鍵後 enter）：",
-			Options: options,
-		}
-		if err := survey.AskOne(prompt, &choice); err != nil {
-			return err
-		}
-
-		switch choice {
-		case options[0]: // 執行 docker 啟動指令
-			return startDocker()
-		case options[1]: // 備份並覆蓋配置
-			if err := backupExisting(); err != nil {
-				return err
-			}
-		case options[2]: // 檢視密碼
-			yellow.Println("⚠️  注意：此會用明文顯示初始密碼，且可能已更改")
-			var confirmShow bool
-			confirmPrompt := &survey.Confirm{
-				Message: "確定要顯示密碼嗎？",
-				Default: false,
-			}
-			if err := survey.AskOne(confirmPrompt, &confirmShow); err != nil {
-				return err
-			}
-
-			if confirmShow {
-				if pass := existingEnv["ADMIN_LOGIN_PASSWORD"]; pass != "" {
-					fmt.Printf("ADMIN_LOGIN_PASSWORD: %s\n", pass)
-				} else {
-					fmt.Println("密碼未設定或為空")
-				}
-			}
-			os.Exit(0)
-		case options[3]: // 結束安裝
-			fmt.Println("安裝取消。")
-			os.Exit(0)
-		}
 	} else if hasEnv {
 		// 只有 .env 沒有資料庫
 		yellow.Println("發現現有的 .env 檔案")
-
-		// 讀取並顯示現有配置
-		existingEnv, _ := godotenv.Read(targetFile)
-		domain := existingEnv["DOMAIN"]
-		port := existingEnv["HTTP_PORT"]
-		adminUser := existingEnv["ADMIN_LOGIN_USER"]
-
-		// 如果有 Caddyfile，優先使用其中的域名
-		if fileExists(caddyfile) {
-			if caddyDomain := getDomainFromCaddyfile(); caddyDomain != "" {
-				domain = caddyDomain
-			}
-		}
-
-		if domain != "" || port != "" || adminUser != "" {
-			fmt.Println()
-			cyan.Println("現有配置：")
-			if domain != "" && domain != "localhost" {
-				fmt.Printf("  域名: %s\n", domain)
-			}
-			if port != "" {
-				fmt.Printf("  端口: %s\n", port)
-			}
-			if adminUser != "" {
-				fmt.Printf("  管理員: %s\n", adminUser)
-			}
-			fmt.Println()
-		}
-
-		var overwrite bool
-		prompt := &survey.Confirm{
-			Message: "是否要更改設定？(舊的 .env 檔會改名備份)",
-			Default: false,
-		}
-		if err := survey.AskOne(prompt, &overwrite); err != nil {
-			return err
-		}
-
-		if !overwrite {
-			// 不要更改設定，但要提供選項菜單
-			return showExistingConfigOptions(existingEnv)
-		}
-
-		if err := backupFile(targetFile); err != nil {
-			return err
-		}
 	}
 
 	// 檢查 Docker
@@ -263,15 +144,109 @@ func doCheck() error {
 		}
 	}
 
-	// 檢查 Caddyfile
-	debugPrint("  🔐 檢查 SSL 配置...")
-	if fileExists(caddyfile) {
-		cyan.Println("現有配置：有 SSL 憑證")
-		if domain := getDomainFromCaddyfile(); domain != "" {
-			fmt.Printf("現有 SSL 域名：%s\n", domain)
+	// 讀取並顯示現有 .env 配置資訊
+	if hasEnv {
+		existingEnv, _ := godotenv.Read(targetFile)
+		domain := existingEnv["DOMAIN"]
+		port := existingEnv["HTTP_PORT"]
+		adminUser := existingEnv["ADMIN_LOGIN_USER"]
+
+		// 如果有 Caddyfile，優先使用其中的域名
+		if fileExists(caddyfile) {
+			if caddyDomain := getDomainFromCaddyfile(); caddyDomain != "" {
+				domain = caddyDomain
+			}
 		}
-	} else {
-		cyan.Println("現有配置：沒有 SSL 憑證")
+
+		if domain != "" || port != "" || adminUser != "" {
+			fmt.Println()
+			cyan.Println("現有配置：")
+			
+			// 檢查 netiCRM 是否運行中
+			isRunning := checkNetiCRMRunning()
+			if isRunning {
+				green.Println("  netiCRM 網站運行中")
+			} else {
+				red.Println("  netiCRM 網站未運行中")
+			}
+			
+			if domain != "" && domain != "localhost" {
+				fmt.Printf("  域名 Domain: %s\n", domain)
+			}
+			if port != "" {
+				fmt.Printf("  端口 Port: %s\n", port)
+			}
+			if adminUser != "" {
+				fmt.Printf("  管理員帳號: %s\n", adminUser)
+			}
+			
+			// 檢查 SSL 配置 - 移動到配置資訊的最後
+			debugPrint("  🔐 檢查 SSL 配置...")
+			if fileExists(caddyfile) {
+				fmt.Println("  有 SSL 憑證")
+			} else {
+				fmt.Println("  沒有 SSL 憑證")
+			}
+		}
+	}
+	
+	// 在檢查完 .env 後顯示選擇選單
+	fmt.Println()
+	options := []string{
+		"1. 執行 docker 啟動指令（若已啟動則不影響）",
+		"2. 備份網站檔案並覆蓋設定",
+		"3. 檢視初始設定管理員密碼 ADMIN_LOGIN_PASSWORD",
+		"4. 結束安裝",
+	}
+
+	var choice string
+	prompt := &survey.Select{
+		Message: "請選擇操作（上下鍵選取，或按下數字鍵後 enter）：",
+		Options: options,
+	}
+	if err := survey.AskOne(prompt, &choice); err != nil {
+		return err
+	}
+
+	switch choice {
+	case options[0]: // 執行 docker 啟動指令
+		return startDocker()
+	case options[1]: // 備份並覆蓋配置
+		// 當用戶選擇備份並覆蓋時，詢問是否備份
+		if hasEnv && hasMariaDBData {
+			if err := backupExisting(); err != nil {
+				return err
+			}
+		} else if hasEnv {
+			if err := backupFile(targetFile); err != nil {
+				return err
+			}
+		}
+		// 繼續安裝流程，返回特殊錯誤信號
+		return fmt.Errorf("continue_install")
+	case options[2]: // 檢視密碼
+		existingEnv, _ := godotenv.Read(targetFile)
+		yellow.Println("⚠️  注意：此會用明文顯示初始密碼，且可能已更改")
+		var confirmShow bool
+		confirmPrompt := &survey.Confirm{
+			Message: "確定要顯示密碼嗎？",
+			Default: false,
+		}
+		if err := survey.AskOne(confirmPrompt, &confirmShow); err != nil {
+			return err
+		}
+
+		if confirmShow {
+			if pass := existingEnv["ADMIN_LOGIN_PASSWORD"]; pass != "" {
+				fmt.Printf("ADMIN_LOGIN_PASSWORD: %s\n", pass)
+			} else {
+				fmt.Println("密碼未設定或為空")
+			}
+		}
+		os.Exit(0)
+	case options[3]: // 結束安裝
+		fmt.Println("安裝取消。")
+		os.Exit(0)
 	}
 
 	return nil
@@ -1106,6 +1081,24 @@ func getAllDomainsFromBackupCaddyfile(backupFile string) []string {
 	}
 
 	return domains
+}
+
+// checkNetiCRMRunning 檢查 netiCRM 容器是否在運行
+func checkNetiCRMRunning() bool {
+	// 檢查是否有 Docker
+	if err := checkDocker(); err != nil {
+		return false
+	}
+
+	// 使用 docker compose ps 檢查容器狀態
+	cmd := exec.Command("docker", "compose", "ps", "--format", "json")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+
+	// 如果有任何輸出，說明有容器在運行
+	return len(output) > 0 && string(output) != "[]\n"
 }
 
 // refreshSSLCertificate 重新抓取 SSL 憑證
