@@ -190,6 +190,12 @@ func doCheck() error {
 		}
 	}
 	
+	// 如果沒有 .env 檔案，直接進入初始設定流程
+	if !hasEnv {
+		debugPrint("  ✓ 沒有 .env 檔案，進入初始設定流程")
+		return nil
+	}
+	
 	// 在檢查完 .env 後顯示選擇選單
 	fmt.Println()
 	options := []string{
