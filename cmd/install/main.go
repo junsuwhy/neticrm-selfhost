@@ -381,19 +381,31 @@ func doRun(cfg *Config) error {
 		composeFile = sslComposeFile
 	}
 
-	green.Printf("✅ .env 建立完成\n")
+	if cfg.Language == "en" {
+		green.Printf("✅ .env file created successfully\n")
+	} else {
+		green.Printf("✅ .env 建立完成\n")
+	}
 
 	// 檢查是否有 Docker
 	debugPrint("  🐳 檢查 Docker 環境...")
 	if err := checkDocker(); err != nil {
-		yellow.Println("Docker Compose 未安裝，請手動執行：")
+		if cfg.Language == "en" {
+			yellow.Println("Docker Compose is not installed. Please run manually:")
+		} else {
+			yellow.Println("Docker Compose 未安裝，請手動執行：")
+		}
 		fmt.Printf("docker compose -f %s up -d\n", composeFile)
 		return nil
 	}
 
 	// 執行 docker compose
 	debugPrint(fmt.Sprintf("  🚀 啟動 Docker 容器 (%s)...", composeFile))
-	fmt.Printf("開始執行 docker compose -f %s up -d ...\n", composeFile)
+	if cfg.Language == "en" {
+		fmt.Printf("Starting docker compose -f %s up -d ...\n", composeFile)
+	} else {
+		fmt.Printf("開始執行 docker compose -f %s up -d ...\n", composeFile)
+	}
 	if err := dockerComposeUp(composeFile); err != nil {
 		return err
 	}
