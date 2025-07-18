@@ -224,7 +224,7 @@ func doCheck() error {
 				return err
 			}
 		} else if hasEnv {
-			if err := backupFile(targetFile); err != nil {
+			if err := backupFile(targetFile, getCurrentLanguage()); err != nil {
 				return err
 			}
 		}
@@ -361,9 +361,17 @@ func doRun(cfg *Config) error {
 		}
 		
 		// 重新啟動 caddy 以更新 SSL 憑證
-		debugPrint("  🔄 重新抓取 SSL 憑證...")
-		if err := refreshSSLCertificate(); err != nil {
-			yellow.Printf("⚠️  SSL 憑證重新抓取失敗: %v\n", err)
+		if cfg.Language == "en" {
+			debugPrint("  🔄 Refreshing SSL certificate...")
+		} else {
+			debugPrint("  🔄 重新抓取 SSL 憑證...")
+		}
+		if err := refreshSSLCertificate(cfg.Language); err != nil {
+			if cfg.Language == "en" {
+				yellow.Printf("⚠️  SSL certificate refresh failed: %v\n", err)
+			} else {
+				yellow.Printf("⚠️  SSL 憑證重新抓取失敗: %v\n", err)
+			}
 		}
 	}
 
@@ -397,6 +405,18 @@ func doRun(cfg *Config) error {
 }
 
 // 輔助函數
+
+// getCurrentLanguage 嘗試從現有 .env 檔案獲取語言設定，預設為繁體中文
+func getCurrentLanguage() string {
+	if fileExists(targetFile) {
+		if env, err := godotenv.Read(targetFile); err == nil {
+			if lang := env["LANGUAGE"]; lang == "en" {
+				return "en"
+			}
+		}
+	}
+	return "zh-hant" // 預設為繁體中文
+}
 
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
@@ -518,7 +538,7 @@ func getAllDomainsFromCaddyfile() []string {
 	return domains
 }
 
-func backupFile(path string) error {
+func backupFile(path string, language string) error {
 	backupPath := path + ".bak"
 	count := 0
 
@@ -528,24 +548,38 @@ func backupFile(path string) error {
 	}
 
 	if err := os.Rename(path, backupPath); err != nil {
+		if language == "en" {
+			return fmt.Errorf("unable to backup %s: %v", path, err)
+		}
 		return fmt.Errorf("無法備份 %s: %v", path, err)
 	}
 
-	green.Printf("已將 %s 備份為 %s\n", path, backupPath)
+	if language == "en" {
+		green.Printf("Backed up %s to %s\n", path, backupPath)
+	} else {
+		green.Printf("已將 %s 備份為 %s\n", path, backupPath)
+	}
 	return nil
 }
 
 func backupExisting() error {
+	language := getCurrentLanguage()
+	
 	// 備份 .env
-	if err := backupFile(targetFile); err != nil {
+	if err := backupFile(targetFile, language); err != nil {
 		return err
 	}
 
 	// 詢問是否備份資料庫
 	if checkMariaDBData() {
 		var backupDB bool
+		message := "是否要備份資料庫、網站檔案（data/mariadb_data、data/www 資料夾）？"
+		if language == "en" {
+			message = "Do you want to backup database and website files (data/mariadb_data, data/www folders)?"
+		}
+		
 		prompt := &survey.Confirm{
-			Message: "是否要備份資料庫、網站檔案（data/mariadb_data、data/www 資料夾）？",
+			Message: message,
 			Default: true,
 		}
 		if err := survey.AskOne(prompt, &backupDB); err != nil {
@@ -553,14 +587,18 @@ func backupExisting() error {
 		}
 
 		if backupDB {
-			if err := backupFile("data/mariadb_data"); err != nil {
+			if err := backupFile("data/mariadb_data", language); err != nil {
 				return err
 			}
 
 			// 同時備份 data/www
 			if fileExists("data/www") {
-				if err := backupFile("data/www"); err != nil {
-					yellow.Printf("警告: 無法備份 data/www: %v\n", err)
+				if err := backupFile("data/www", language); err != nil {
+					if language == "en" {
+						yellow.Printf("Warning: Unable to backup data/www: %v\n", err)
+					} else {
+						yellow.Printf("警告: 無法備份 data/www: %v\n", err)
+					}
 				}
 			}
 		}
@@ -989,7 +1027,7 @@ func updateCaddyfile(cfg *Config) error {
 
 	// 如果 Caddyfile 已存在，先備份
 	if fileExists(caddyfile) {
-		if err := backupFile(caddyfile); err != nil {
+		if err := backupFile(caddyfile, cfg.Language); err != nil {
 			return err
 		}
 	}
@@ -1039,7 +1077,11 @@ func updateCaddyfile(cfg *Config) error {
 		return err
 	}
 
-	green.Printf("✅ Caddyfile 已更新\n")
+	if cfg.Language == "en" {
+		green.Printf("✅ Caddyfile updated\n")
+	} else {
+		green.Printf("✅ Caddyfile 已更新\n")
+	}
 	return nil
 }
 
@@ -1115,13 +1157,17 @@ func checkNetiCRMRunning() bool {
 }
 
 // refreshSSLCertificate 重新抓取 SSL 憑證
-func refreshSSLCertificate() error {
+func refreshSSLCertificate(language string) error {
 	// 檢查是否有 Docker
 	if err := checkDocker(); err != nil {
 		return err
 	}
 
-	green.Println("正在重新抓取 SSL 憑證...")
+	if language == "en" {
+		green.Println("Refreshing SSL certificate...")
+	} else {
+		green.Println("正在重新抓取 SSL 憑證...")
+	}
 	
 	// 執行 docker compose -f docker-compose-ssl.yaml up -d --force-recreate caddy
 	cmd := exec.Command("docker", "compose", "-f", sslComposeFile, "up", "-d", "--force-recreate", "caddy")
@@ -1129,10 +1175,17 @@ func refreshSSLCertificate() error {
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
+		if language == "en" {
+			return fmt.Errorf("failed to restart caddy: %w", err)
+		}
 		return fmt.Errorf("執行 caddy 重新啟動失敗: %w", err)
 	}
 
-	green.Println("✅ SSL 憑證重新抓取完成")
+	if language == "en" {
+		green.Println("✅ SSL certificate refresh completed")
+	} else {
+		green.Println("✅ SSL 憑證重新抓取完成")
+	}
 	return nil
 }
 
