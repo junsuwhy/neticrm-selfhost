@@ -243,7 +243,14 @@ func doCheck() error {
 				fmt.Println("密碼未設定或為空")
 			}
 		}
-		os.Exit(0)
+		
+		// 顯示按任意鍵繼續的訊息
+		fmt.Println()
+		cyan.Println("按 Enter 鍵繼續...")
+		fmt.Scanln()
+		
+		// 遞迴調用 doCheck 回到選項選單
+		return doCheck()
 	case options[3]: // 結束安裝
 		fmt.Println("安裝取消。")
 		os.Exit(0)
