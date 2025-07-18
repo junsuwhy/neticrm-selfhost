@@ -55,6 +55,9 @@ After compilation, you can run the installer from the netiCRM Self-Host director
 ```bash
 # From the project root directory
 ./install
+
+# Run with verbose output for more detailed system messages
+./install -v
 ```
 
 ## Important Notes
