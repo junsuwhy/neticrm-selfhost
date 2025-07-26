@@ -46,7 +46,7 @@ var (
 	cyan    = color.New(color.FgCyan)
 	bold    = color.New(color.Bold)
 	gray    = color.New(color.FgHiBlack) // 暗色系用於 debug 訊息
-	verbose = false                     // 是否顯示 debug 訊息
+	verbose = false                      // 是否顯示 debug 訊息
 )
 
 func main() {
@@ -109,7 +109,7 @@ func doCheck() error {
 	// 檢查是否有 .env 和資料庫檔案
 	hasEnv := fileExists(targetFile)
 	hasMariaDBData := checkMariaDBData()
-	
+
 	if hasEnv {
 		debugPrint("  ✓ 發現 .env 檔案")
 	}
@@ -161,7 +161,7 @@ func doCheck() error {
 		if domain != "" || port != "" || adminUser != "" {
 			fmt.Println()
 			cyan.Println("現有配置：")
-			
+
 			// 檢查 netiCRM 是否運行中
 			isRunning := checkNetiCRMRunning()
 			if isRunning {
@@ -169,7 +169,7 @@ func doCheck() error {
 			} else {
 				red.Println("  netiCRM 網站未運行中")
 			}
-			
+
 			if domain != "" && domain != "localhost" {
 				fmt.Printf("  域名 Domain: %s\n", domain)
 			}
@@ -179,7 +179,7 @@ func doCheck() error {
 			if adminUser != "" {
 				fmt.Printf("  管理員帳號: %s\n", adminUser)
 			}
-			
+
 			// 檢查 SSL 配置 - 移動到配置資訊的最後
 			debugPrint("  🔐 檢查 SSL 配置...")
 			if fileExists(caddyfile) {
@@ -189,13 +189,13 @@ func doCheck() error {
 			}
 		}
 	}
-	
+
 	// 如果沒有 .env 檔案，直接進入初始設定流程
 	if !hasEnv {
 		debugPrint("  ✓ 沒有 .env 檔案，進入初始設定流程")
 		return nil
 	}
-	
+
 	// 在檢查完 .env 後顯示選擇選單
 	fmt.Println()
 	options := []string{
@@ -249,12 +249,12 @@ func doCheck() error {
 				fmt.Println("密碼未設定或為空")
 			}
 		}
-		
+
 		// 顯示按任意鍵繼續的訊息
 		fmt.Println()
 		cyan.Println("按 Enter 鍵繼續...")
 		fmt.Scanln()
-		
+
 		// 遞迴調用 doCheck 回到選項選單
 		return doCheck()
 	case options[3]: // 結束安裝
@@ -359,7 +359,7 @@ func doRun(cfg *Config) error {
 		if err := updateCaddyfile(cfg); err != nil {
 			return fmt.Errorf("更新 Caddyfile 失敗: %w", err)
 		}
-		
+
 		// 重新啟動 caddy 以更新 SSL 憑證
 		if cfg.Language == "en" {
 			debugPrint("  🔄 Refreshing SSL certificate...")
@@ -576,7 +576,7 @@ func backupFile(path string, language string) error {
 
 func backupExisting() error {
 	language := getCurrentLanguage()
-	
+
 	// 備份 .env
 	if err := backupFile(targetFile, language); err != nil {
 		return err
@@ -589,7 +589,7 @@ func backupExisting() error {
 		if language == "en" {
 			message = "Do you want to backup database and website files (data/mariadb_data, data/www folders)?"
 		}
-		
+
 		prompt := &survey.Confirm{
 			Message: message,
 			Default: true,
@@ -707,7 +707,7 @@ func askLanguage(cfg *Config) error {
 func askDomainAndSSL(cfg *Config) error {
 	// 檢查是否已有 Caddyfile
 	hasCaddyfile := fileExists(caddyfile)
-	
+
 	// SSL 詢問
 	sslPrompt := "Do you have a domain and want to set up SSL automatically?"
 	if cfg.Language == "zh-hant" {
@@ -735,7 +735,7 @@ func askDomainAndSSL(cfg *Config) error {
 				} else {
 					modifyPrompt = fmt.Sprintf("Found existing Caddyfile with domains: %s\nDo you want to modify the Caddyfile?", strings.Join(existingDomains, ", "))
 				}
-				
+
 				var modifyCaddyfile bool
 				modifyConfirm := &survey.Confirm{
 					Message: modifyPrompt,
@@ -744,7 +744,7 @@ func askDomainAndSSL(cfg *Config) error {
 				if err := survey.AskOne(modifyConfirm, &modifyCaddyfile); err != nil {
 					return err
 				}
-				
+
 				if !modifyCaddyfile {
 					if cfg.Language == "zh-hant" {
 						fmt.Println("保留現有的 Caddyfile 設定。")
@@ -888,11 +888,55 @@ func askAdminCredentials(cfg *Config) error {
 	}
 
 	// Password
-	if err := askPasswordWithConfirm(cfg, "ADMIN_LOGIN_PASSWORD", &cfg.AdminLoginPassword, 11); err != nil {
+	if err := askAdminPassword(cfg); err != nil {
 		return err
 	}
 
 	return nil
+}
+
+func askAdminPassword(cfg *Config) error {
+	passPrompt := "ADMIN_LOGIN_PASSWORD (leave blank for random password):"
+	confirmPrompt := "Please re-enter ADMIN_LOGIN_PASSWORD to confirm:"
+	mismatchMsg := "✗ Passwords do not match. Please re-enter."
+
+	if cfg.Language == "zh-hant" {
+		passPrompt = "ADMIN_LOGIN_PASSWORD (留空自動產生)："
+		confirmPrompt = "請再次輸入ADMIN_LOGIN_PASSWORD密碼確認："
+		mismatchMsg = "✗ 兩次密碼不一致，請重新輸入。"
+	}
+
+	for {
+		var password string
+		passwordInput := &survey.Password{
+			Message: passPrompt,
+		}
+		if err := survey.AskOne(passwordInput, &password); err != nil {
+			return err
+		}
+
+		if password == "" {
+			// 對於 ADMIN_LOGIN_PASSWORD，如果按空白選隨機，則留空
+			// 在安裝時期會自動代入強密碼
+			cfg.AdminLoginPassword = ""
+			return nil
+		}
+
+		var confirm string
+		confirmInput := &survey.Password{
+			Message: confirmPrompt,
+		}
+		if err := survey.AskOne(confirmInput, &confirm); err != nil {
+			return err
+		}
+
+		if password == confirm {
+			cfg.AdminLoginPassword = password
+			return nil
+		}
+
+		red.Println(mismatchMsg)
+	}
 }
 
 func askPasswordWithConfirm(cfg *Config, field string, target *string, defaultLen int) error {
@@ -938,12 +982,12 @@ func askPasswordWithConfirm(cfg *Config, field string, target *string, defaultLe
 }
 
 func randomPass(length int) string {
-	// 定義字符集
+	// 定義字符集，避免會影響指令的符號如 $ 等
 	const (
 		lowercase = "abcdefghijklmnopqrstuvwxyz"
 		uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 		digits    = "0123456789"
-		symbols   = "!@#$%^&*"
+		symbols   = "!@#%^&*-_=+"
 	)
 	allChars := lowercase + uppercase + digits + symbols
 
@@ -985,7 +1029,12 @@ func writeEnvFile(cfg *Config) error {
 		// 如果無法讀取範例檔，直接寫入
 		var lines []string
 		for key, val := range cfg.envVars {
-			lines = append(lines, fmt.Sprintf("%s=\"%s\"", key, val))
+			// 特殊處理 ADMIN_LOGIN_PASSWORD: 如果為空則留空，讓安裝時期自動代入強密碼
+			if key == "ADMIN_LOGIN_PASSWORD" && val == "" {
+				lines = append(lines, fmt.Sprintf("%s=\"\"", key))
+			} else if val != "" {
+				lines = append(lines, fmt.Sprintf("%s=\"%s\"", key, val))
+			}
 		}
 		content := strings.Join(lines, "\n") + "\n"
 		return os.WriteFile(targetFile, []byte(content), 0644)
@@ -1010,8 +1059,15 @@ func writeEnvFile(cfg *Config) error {
 		if len(parts) == 2 {
 			key := strings.TrimSpace(parts[0])
 
-			if val, ok := cfg.envVars[key]; ok && val != "" {
-				fmt.Fprintf(&newContent, "%s=\"%s\"\n", key, val)
+			if val, ok := cfg.envVars[key]; ok {
+				// 特殊處理 ADMIN_LOGIN_PASSWORD: 如果為空則留空，讓安裝時期自動代入強密碼
+				if key == "ADMIN_LOGIN_PASSWORD" && val == "" {
+					fmt.Fprintf(&newContent, "%s=\"\"\n", key)
+				} else if val != "" {
+					fmt.Fprintf(&newContent, "%s=\"%s\"\n", key, val)
+				} else {
+					fmt.Fprintln(&newContent, line)
+				}
 				written[key] = true
 			} else {
 				fmt.Fprintln(&newContent, line)
@@ -1023,8 +1079,13 @@ func writeEnvFile(cfg *Config) error {
 
 	// 添加未寫入的變數
 	for key, val := range cfg.envVars {
-		if !written[key] && val != "" {
-			fmt.Fprintf(&newContent, "%s=\"%s\"\n", key, val)
+		if !written[key] {
+			// 特殊處理 ADMIN_LOGIN_PASSWORD: 如果為空則留空，讓安裝時期自動代入強密碼
+			if key == "ADMIN_LOGIN_PASSWORD" && val == "" {
+				fmt.Fprintf(&newContent, "%s=\"\"\n", key)
+			} else if val != "" {
+				fmt.Fprintf(&newContent, "%s=\"%s\"\n", key, val)
+			}
 		}
 	}
 
@@ -1058,7 +1119,7 @@ func updateCaddyfile(cfg *Config) error {
 
 	// 建立新的 Caddyfile 內容
 	content := string(data)
-	
+
 	// 準備域名列表
 	var allDomains []string
 	for _, domain := range existingDomains {
@@ -1069,10 +1130,10 @@ func updateCaddyfile(cfg *Config) error {
 	}
 	// 加入新域名
 	allDomains = append(allDomains, cfg.Domain)
-	
+
 	// 建立域名字串
 	domainString := strings.Join(allDomains, " , ")
-	
+
 	// 替換內容
 	content = strings.ReplaceAll(content, "your.domain.name", domainString)
 	if cfg.Email != "" {
@@ -1180,7 +1241,7 @@ func refreshSSLCertificate(language string) error {
 	} else {
 		green.Println("正在重新抓取 SSL 憑證...")
 	}
-	
+
 	// 執行 docker compose -f docker-compose-ssl.yaml up -d --force-recreate caddy
 	cmd := exec.Command("docker", "compose", "-f", sslComposeFile, "up", "-d", "--force-recreate", "caddy")
 	cmd.Stdout = os.Stdout
@@ -1275,6 +1336,6 @@ func showExistingConfigOptions(existingEnv map[string]string) error {
 		fmt.Println("安裝取消。")
 		os.Exit(0)
 	}
-	
+
 	return nil
 }
